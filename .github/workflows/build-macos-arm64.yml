@@ -16,6 +16,12 @@ concurrency:
   group: build-macos-arm64-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  DERIVED_DATA_PATH: .ci-derived
+  SWIFTPM_CACHE_PATH: .ci-swiftpm
+  OUTPUT_DIR: build-output
+  WHISPER_CPP_REF: master
+
 jobs:
   build:
     name: Build local app
@@ -64,192 +70,75 @@ jobs:
         run: |
           mkdir -p "$HOME/Downloads"
           mkdir -p "$HOME/VoiceInk-Dependencies"
+          mkdir -p "$SWIFTPM_CACHE_PATH" "$OUTPUT_DIR"
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.SWIFTPM_CACHE_PATH }}
+          key: voiceink-swiftpm-xcode26-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('VoiceInk.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            voiceink-swiftpm-xcode26-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache whisper.cpp build
         uses: actions/cache@v4
         with:
           path: ~/VoiceInk-Dependencies
-          key: voiceink-whisper-macos-arm64-xcode26-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+          key: voiceink-whisper-macos-arm64-xcode26-${{ runner.os }}-${{ runner.arch }}-${{ env.WHISPER_CPP_REF }}-${{ hashFiles('.github/scripts/build-whisper-macos-arm64.sh') }}
           restore-keys: |
-            voiceink-whisper-macos-arm64-xcode26-${{ runner.os }}-${{ runner.arch }}-
+            voiceink-whisper-macos-arm64-xcode26-${{ runner.os }}-${{ runner.arch }}-${{ env.WHISPER_CPP_REF }}-
 
       - name: Build macOS arm64 whisper.xcframework
+        run: bash .github/scripts/build-whisper-macos-arm64.sh
+
+      - name: Resolve Swift packages
         run: |
-          set -euxo pipefail
-
-          DEPS_DIR="$HOME/VoiceInk-Dependencies"
-          WHISPER_CPP_DIR="$DEPS_DIR/whisper.cpp"
-          FRAMEWORK_PATH="$WHISPER_CPP_DIR/build-apple/whisper.xcframework"
-
-          if [ -d "$FRAMEWORK_PATH" ]; then
-            echo "Using cached whisper.xcframework at $FRAMEWORK_PATH"
-            exit 0
-          fi
-
-          if [ ! -d "$WHISPER_CPP_DIR/.git" ]; then
-            rm -rf "$WHISPER_CPP_DIR"
-            git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git "$WHISPER_CPP_DIR"
-          fi
-
-          cd "$WHISPER_CPP_DIR"
-
-          cmake -B build-macos -G Xcode \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY="" \
-            -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DWHISPER_BUILD_EXAMPLES=OFF \
-            -DWHISPER_BUILD_TESTS=OFF \
-            -DWHISPER_BUILD_SERVER=OFF \
-            -DGGML_METAL=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DGGML_BLAS_DEFAULT=ON \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_NATIVE=OFF \
-            -DGGML_OPENMP=OFF \
-            -DWHISPER_COREML=ON \
-            -DWHISPER_COREML_ALLOW_FALLBACK=ON \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3 \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -S .
-
-          cmake --build build-macos --config Release -- -quiet
-
-          FRAMEWORK_DIR="$WHISPER_CPP_DIR/build-apple/macos-arm64/whisper.framework"
-          BIN_PATH="$FRAMEWORK_DIR/Versions/A/whisper"
-          HEADER_DIR="$FRAMEWORK_DIR/Versions/A/Headers"
-          MODULE_DIR="$FRAMEWORK_DIR/Versions/A/Modules"
-          RESOURCE_DIR="$FRAMEWORK_DIR/Versions/A/Resources"
-          TEMP_DIR="$WHISPER_CPP_DIR/build-apple/temp"
-
-          rm -rf "$WHISPER_CPP_DIR/build-apple"
-          mkdir -p "$HEADER_DIR" "$MODULE_DIR" "$RESOURCE_DIR" "$TEMP_DIR"
-
-          ln -sfn A "$FRAMEWORK_DIR/Versions/Current"
-          ln -sfn Versions/Current/Headers "$FRAMEWORK_DIR/Headers"
-          ln -sfn Versions/Current/Modules "$FRAMEWORK_DIR/Modules"
-          ln -sfn Versions/Current/Resources "$FRAMEWORK_DIR/Resources"
-          ln -sfn Versions/Current/whisper "$FRAMEWORK_DIR/whisper"
-
-          cp include/whisper.h "$HEADER_DIR/"
-          [ -f include/parakeet.h ] && cp include/parakeet.h "$HEADER_DIR/"
-          cp ggml/include/ggml.h "$HEADER_DIR/"
-          cp ggml/include/ggml-alloc.h "$HEADER_DIR/"
-          cp ggml/include/ggml-backend.h "$HEADER_DIR/"
-          cp ggml/include/ggml-metal.h "$HEADER_DIR/"
-          cp ggml/include/ggml-cpu.h "$HEADER_DIR/"
-          cp ggml/include/ggml-blas.h "$HEADER_DIR/"
-          cp ggml/include/gguf.h "$HEADER_DIR/"
-
-          cat > "$MODULE_DIR/module.modulemap" <<'EOF'
-          framework module whisper {
-              header "whisper.h"
-              header "ggml.h"
-              header "ggml-alloc.h"
-              header "ggml-backend.h"
-              header "ggml-metal.h"
-              header "ggml-cpu.h"
-              header "ggml-blas.h"
-              header "gguf.h"
-
-              link "c++"
-              link framework "Accelerate"
-              link framework "Metal"
-              link framework "Foundation"
-
-              export *
-          }
-          EOF
-
-          cat > "$RESOURCE_DIR/Info.plist" <<'EOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>CFBundleDevelopmentRegion</key>
-              <string>en</string>
-              <key>CFBundleExecutable</key>
-              <string>whisper</string>
-              <key>CFBundleIdentifier</key>
-              <string>org.ggml.whisper</string>
-              <key>CFBundleInfoDictionaryVersion</key>
-              <string>6.0</string>
-              <key>CFBundleName</key>
-              <string>whisper</string>
-              <key>CFBundlePackageType</key>
-              <string>FMWK</string>
-              <key>CFBundleShortVersionString</key>
-              <string>1.0</string>
-              <key>CFBundleVersion</key>
-              <string>1</string>
-              <key>MinimumOSVersion</key>
-              <string>13.3</string>
-              <key>CFBundleSupportedPlatforms</key>
-              <array>
-                  <string>MacOSX</string>
-              </array>
-              <key>DTPlatformName</key>
-              <string>macosx</string>
-          </dict>
-          </plist>
-          EOF
-
-          libs=(
-            "build-macos/src/Release/libwhisper.a"
-            "build-macos/src/Release/libparakeet.a"
-            "build-macos/src/Release/libwhisper.coreml.a"
-            "build-macos/ggml/src/Release/libggml.a"
-            "build-macos/ggml/src/Release/libggml-base.a"
-            "build-macos/ggml/src/Release/libggml-cpu.a"
-            "build-macos/ggml/src/ggml-metal/Release/libggml-metal.a"
-            "build-macos/ggml/src/ggml-blas/Release/libggml-blas.a"
-          )
-
-          existing_libs=()
-          for lib in "${libs[@]}"; do
-            if [ -f "$lib" ]; then
-              existing_libs+=("$lib")
-            else
-              echo "Skipping missing optional library: $lib"
-            fi
-          done
-
-          libtool -static -o "$TEMP_DIR/combined.a" "${existing_libs[@]}"
-
-          xcrun -sdk macosx clang++ -dynamiclib \
-            -isysroot "$(xcrun --sdk macosx --show-sdk-path)" \
-            -arch arm64 \
-            -mmacosx-version-min=13.3 \
-            -Wl,-force_load,"$TEMP_DIR/combined.a" \
-            -framework Foundation \
-            -framework Metal \
-            -framework Accelerate \
-            -framework CoreML \
-            -install_name "@rpath/whisper.framework/Versions/Current/whisper" \
-            -o "$BIN_PATH"
-
-          xcodebuild -create-xcframework \
-            -framework "$FRAMEWORK_DIR" \
-            -output "$FRAMEWORK_PATH"
-
-          xcrun lipo -archs "$BIN_PATH"
-          find "$FRAMEWORK_PATH" -maxdepth 3 -type f -o -type l
+          set -o pipefail
+          xcodebuild -resolvePackageDependencies \
+            -project VoiceInk.xcodeproj \
+            -scheme VoiceInk \
+            -clonedSourcePackagesDirPath "$PWD/$SWIFTPM_CACHE_PATH" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            2>&1 | tee resolve-packages.log
 
       - name: Build VoiceInk for local use
         run: |
           set -o pipefail
-          make local 2>&1 | tee build.log
+          rm -rf "$DERIVED_DATA_PATH" "$OUTPUT_DIR/VoiceInk.app"
+
+          xcodebuild -project VoiceInk.xcodeproj -scheme VoiceInk -configuration Debug \
+            -derivedDataPath "$PWD/$DERIVED_DATA_PATH" \
+            -clonedSourcePackagesDirPath "$PWD/$SWIFTPM_CACHE_PATH" \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            -xcconfig LocalBuild.xcconfig \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="" \
+            CODE_SIGN_ENTITLEMENTS="$PWD/VoiceInk/VoiceInk.local.entitlements" \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) LOCAL_BUILD' \
+            build \
+            2>&1 | tee build.log
+
+          APP_PATH="$PWD/$DERIVED_DATA_PATH/Build/Products/Debug/VoiceInk.app"
+          test -d "$APP_PATH"
+          ditto "$APP_PATH" "$OUTPUT_DIR/VoiceInk.app"
+          xattr -cr "$OUTPUT_DIR/VoiceInk.app"
 
       - name: Locate built app
         run: |
-          echo "Apps under ~/Downloads:"
-          find "$HOME/Downloads" -maxdepth 2 -name '*.app' -print || true
-          echo "Apps under .local-build:"
-          find .local-build -maxdepth 6 -name '*.app' -print || true
+          echo "Apps under output directory:"
+          find "$OUTPUT_DIR" -maxdepth 2 -name '*.app' -print || true
+          echo "Apps under derived data:"
+          find "$DERIVED_DATA_PATH" -maxdepth 6 -name '*.app' -print || true
 
       - name: Verify Apple Silicon app
         run: |
-          APP="$HOME/Downloads/VoiceInk.app"
+          APP="$OUTPUT_DIR/VoiceInk.app"
           EXECUTABLE="$APP/Contents/MacOS/VoiceInk"
 
           test -d "$APP"
@@ -269,7 +158,7 @@ jobs:
 
       - name: Package app
         run: |
-          APP="$HOME/Downloads/VoiceInk.app"
+          APP="$OUTPUT_DIR/VoiceInk.app"
           ZIP="VoiceInk-${GITHUB_SHA::7}-macos-arm64.zip"
 
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
@@ -286,11 +175,13 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload build log on failure
+      - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: VoiceInk-build-log-${{ github.sha }}
-          path: build.log
+          name: VoiceInk-build-logs-${{ github.sha }}
+          path: |
+            build.log
+            resolve-packages.log
           if-no-files-found: ignore
           retention-days: 7
