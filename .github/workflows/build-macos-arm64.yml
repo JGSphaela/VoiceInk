@@ -20,7 +20,7 @@ jobs:
   build:
     name: Build local app
     runs-on: macos-14
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
@@ -32,9 +32,32 @@ jobs:
           uname -m
           xcodebuild -version
           swift --version
+          df -h
+
+      - name: Prepare build directories
+        run: |
+          mkdir -p "$HOME/Downloads"
+          mkdir -p "$HOME/VoiceInk-Dependencies"
+
+      - name: Cache whisper.cpp build
+        uses: actions/cache@v4
+        with:
+          path: ~/VoiceInk-Dependencies
+          key: voiceink-whisper-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+          restore-keys: |
+            voiceink-whisper-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build VoiceInk for local use
-        run: make local
+        run: |
+          set -o pipefail
+          make local 2>&1 | tee build.log
+
+      - name: Locate built app
+        run: |
+          echo "Apps under ~/Downloads:"
+          find "$HOME/Downloads" -maxdepth 2 -name '*.app' -print || true
+          echo "Apps under .local-build:"
+          find .local-build -maxdepth 6 -name '*.app' -print || true
 
       - name: Verify Apple Silicon app
         run: |
@@ -74,3 +97,12 @@ jobs:
             VoiceInk-*-macos-arm64.zip.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceInk-build-log-${{ github.sha }}
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 7
