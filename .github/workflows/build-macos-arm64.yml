@@ -185,11 +185,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
-          git push -f origin "refs/tags/$RELEASE_TAG"
-
           notes="Automated Apple Silicon local build from commit ${GITHUB_SHA}.
 
 Download VoiceInk-macos-arm64.dmg, open it, then drag VoiceInk.app to Applications.
@@ -203,6 +198,7 @@ This is an ad-hoc signed, non-notarized fork build. macOS may require right-clic
               --prerelease
           else
             gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
               --title "Latest VoiceInk Apple Silicon Build" \
               --notes "$notes" \
               --prerelease
