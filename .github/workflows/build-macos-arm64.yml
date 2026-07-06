@@ -185,22 +185,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          notes="Automated Apple Silicon local build from commit ${GITHUB_SHA}.
+          cat > release-notes.md <<EOF
+          Automated Apple Silicon local build from commit ${GITHUB_SHA}.
 
-Download VoiceInk-macos-arm64.dmg, open it, then drag VoiceInk.app to Applications.
+          Download VoiceInk-macos-arm64.dmg, open it, then drag VoiceInk.app to Applications.
 
-This is an ad-hoc signed, non-notarized fork build. macOS may require right-click Open on first launch."
+          This is an ad-hoc signed, non-notarized fork build. macOS may require right-click Open on first launch.
+          EOF
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" \
               --title "Latest VoiceInk Apple Silicon Build" \
-              --notes "$notes" \
+              --notes-file release-notes.md \
               --prerelease
           else
             gh release create "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --title "Latest VoiceInk Apple Silicon Build" \
-              --notes "$notes" \
+              --notes-file release-notes.md \
               --prerelease
           fi
 
