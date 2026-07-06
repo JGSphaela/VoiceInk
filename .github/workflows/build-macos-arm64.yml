@@ -157,15 +157,26 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$APP" || \
             echo "::warning::codesign verification failed. This is an ad-hoc local build, not a notarized release build."
 
-      - name: Package app
+      - name: Package DMG
         run: |
           APP="$OUTPUT_DIR/VoiceInk.app"
-          ZIP="VoiceInk-macos-arm64.zip"
+          DMG_ROOT="$OUTPUT_DIR/dmg-root"
+          DMG="VoiceInk-macos-arm64.dmg"
 
-          rm -f "$ZIP" "$ZIP.sha256"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
-          shasum -a 256 "$ZIP" > "$ZIP.sha256"
-          ls -lh "$ZIP" "$ZIP.sha256"
+          rm -rf "$DMG_ROOT" "$DMG" "$DMG.sha256"
+          mkdir -p "$DMG_ROOT"
+          ditto "$APP" "$DMG_ROOT/VoiceInk.app"
+          ln -s /Applications "$DMG_ROOT/Applications"
+
+          hdiutil create \
+            -volname "VoiceInk" \
+            -srcfolder "$DMG_ROOT" \
+            -ov \
+            -format UDZO \
+            "$DMG"
+
+          shasum -a 256 "$DMG" > "$DMG.sha256"
+          ls -lh "$DMG" "$DMG.sha256"
 
       - name: Publish rolling prerelease
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -180,6 +191,8 @@ jobs:
           git push -f origin "refs/tags/$RELEASE_TAG"
 
           notes="Automated Apple Silicon local build from commit ${GITHUB_SHA}.
+
+Download VoiceInk-macos-arm64.dmg, open it, then drag VoiceInk.app to Applications.
 
 This is an ad-hoc signed, non-notarized fork build. macOS may require right-click Open on first launch."
 
@@ -196,8 +209,8 @@ This is an ad-hoc signed, non-notarized fork build. macOS may require right-clic
           fi
 
           gh release upload "$RELEASE_TAG" \
-            VoiceInk-macos-arm64.zip \
-            VoiceInk-macos-arm64.zip.sha256 \
+            VoiceInk-macos-arm64.dmg \
+            VoiceInk-macos-arm64.dmg.sha256 \
             --clobber
 
       - name: Upload app artifact
@@ -205,8 +218,8 @@ This is an ad-hoc signed, non-notarized fork build. macOS may require right-clic
         with:
           name: VoiceInk-macos-arm64-${{ github.sha }}
           path: |
-            VoiceInk-macos-arm64.zip
-            VoiceInk-macos-arm64.zip.sha256
+            VoiceInk-macos-arm64.dmg
+            VoiceInk-macos-arm64.dmg.sha256
           if-no-files-found: error
           retention-days: 14
 
