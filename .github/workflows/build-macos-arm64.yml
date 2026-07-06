@@ -1,0 +1,76 @@
+name: Build macOS Apple Silicon
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build local app
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show build environment
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          swift --version
+
+      - name: Build VoiceInk for local use
+        run: make local
+
+      - name: Verify Apple Silicon app
+        run: |
+          APP="$HOME/Downloads/VoiceInk.app"
+          EXECUTABLE="$APP/Contents/MacOS/VoiceInk"
+
+          test -d "$APP"
+          test -x "$EXECUTABLE"
+
+          file "$EXECUTABLE"
+          ARCHS="$(lipo -archs "$EXECUTABLE")"
+          echo "Architectures: $ARCHS"
+
+          if [[ "$ARCHS" != *"arm64"* ]]; then
+            echo "::error::Expected an arm64 Apple Silicon build, got: $ARCHS"
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP" || \
+            echo "::warning::codesign verification failed. This is an ad-hoc local build, not a notarized release build."
+
+      - name: Package app
+        run: |
+          APP="$HOME/Downloads/VoiceInk.app"
+          ZIP="VoiceInk-${GITHUB_SHA::7}-macos-arm64.zip"
+
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+          shasum -a 256 "$ZIP" > "$ZIP.sha256"
+          ls -lh "$ZIP" "$ZIP.sha256"
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceInk-macos-arm64-${{ github.sha }}
+          path: |
+            VoiceInk-*-macos-arm64.zip
+            VoiceInk-*-macos-arm64.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
