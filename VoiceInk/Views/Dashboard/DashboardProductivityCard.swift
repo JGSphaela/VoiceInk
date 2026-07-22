@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct DashboardProductivityCard: View {
@@ -36,7 +37,7 @@ struct DashboardProductivityCard: View {
             }
 
             DashboardProductivityChart(period: period, points: points)
-                .frame(height: 188)
+                .frame(height: 208)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -47,7 +48,6 @@ struct DashboardProductivityCard: View {
         isRefreshingStats ? String(localized: "Updating") : updatedAtText
     }
 }
-
 struct DashboardProductivitySummaryStrip: View {
     let summary: DashboardTimeSavedSummary
 
@@ -146,24 +146,78 @@ private struct DashboardStatsRefreshButton: View {
     }
 }
 
+private enum DashboardProductivityChartData {
+    static func visiblePoints(
+        for period: DashboardInsightPeriod,
+        points: [DashboardProductivityPoint],
+        now: Date = Date()
+    ) -> [DashboardProductivityPoint] {
+        Array(points.prefix(visiblePointCount(for: period, points: points, now: now)))
+    }
+
+    static func visiblePointCount(
+        for period: DashboardInsightPeriod,
+        points: [DashboardProductivityPoint],
+        now: Date = Date()
+    ) -> Int {
+        guard period == .today, let firstPoint = points.first else {
+            return points.count
+        }
+
+        let calendar = DashboardPeriodWindows.dashboardCalendar()
+
+        guard calendar.isDate(firstPoint.date, inSameDayAs: now) else {
+            return points.count
+        }
+
+        return min(points.count, calendar.component(.hour, from: now) + 1)
+    }
+
+    static func yAxisUpperBound(for value: Int) -> Int {
+        guard value > 0 else {
+            return 0
+        }
+
+        let paddedValue = Double(value) * 1.06
+        let magnitude = pow(10, max(0, floor(log10(paddedValue)) - 1))
+        let step = max(1, Int(magnitude))
+
+        return max(value, Int(ceil(paddedValue / Double(step))) * step)
+    }
+}
+
 private struct DashboardProductivityChart: View {
     let period: DashboardInsightPeriod
     let points: [DashboardProductivityPoint]
 
-    private var axisMaximum: Int {
-        Formatters.roundedChartMaximum(for: points.map(\.words).max() ?? 0)
+    private var yAxisUpperBound: Int {
+        DashboardProductivityChartData.yAxisUpperBound(for: visiblePoints.map(\.words).max() ?? 0)
     }
 
-    private var axisLabels: [Int] {
-        guard axisMaximum > 0 else { return [] }
+    private var hasWords: Bool {
+        visiblePoints.contains { $0.words > 0 }
+    }
+
+    private var visiblePoints: [DashboardProductivityPoint] {
+        DashboardProductivityChartData.visiblePoints(for: period, points: points)
+    }
+
+    private var horizontalSlotCount: Int {
+        period == .today ? 24 : max(visiblePoints.count, 1)
+    }
+
+    private var yAxisLabels: [Int] {
+        guard hasWords else {
+            return [0]
+        }
 
         return [
-            axisMaximum,
-            axisMaximum * 3 / 4,
-            axisMaximum / 2,
-            axisMaximum / 4
+            yAxisUpperBound,
+            yAxisUpperBound * 3 / 4,
+            yAxisUpperBound / 2,
+            yAxisUpperBound / 4,
+            0,
         ]
-        .filter { $0 > 0 }
         .reduce(into: []) { labels, value in
             if !labels.contains(value) {
                 labels.append(value)
@@ -173,13 +227,15 @@ private struct DashboardProductivityChart: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            DashboardProductivityScale(labels: axisLabels)
+            DashboardProductivityYAxis(labels: yAxisLabels)
                 .accessibilityHidden(true)
 
-            DashboardProductivityPlot(
+            DashboardProductivityPlotArea(
                 period: period,
                 points: points,
-                axisMaximum: axisMaximum
+                visiblePoints: visiblePoints,
+                yAxisUpperBound: yAxisUpperBound,
+                horizontalSlotCount: horizontalSlotCount
             )
         }
         .accessibilityElement(children: .contain)
@@ -195,21 +251,26 @@ private struct DashboardProductivityChart: View {
     }
 }
 
-private struct DashboardProductivityScale: View {
+private struct DashboardProductivityYAxis: View {
     let labels: [Int]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(labels, id: \.self) { label in
-                    Text(Formatters.formattedAxisValue(label))
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(AppTheme.Text.secondary)
-                        .lineLimit(1)
-                        .frame(maxHeight: .infinity, alignment: .topLeading)
+            if labels.count == 1, let label = labels.first {
+                VStack(alignment: .leading, spacing: 0) {
+                    Spacer(minLength: 0)
+                    yAxisLabel(label)
                 }
+                .frame(maxHeight: .infinity, alignment: .bottomLeading)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(labels, id: \.self) { label in
+                        yAxisLabel(label)
+                            .frame(maxHeight: .infinity, alignment: .topLeading)
+                    }
+                }
+                .frame(maxHeight: .infinity, alignment: .topLeading)
             }
-            .frame(maxHeight: .infinity, alignment: .topLeading)
 
             Text("Words")
                 .font(.system(size: 10, weight: .semibold))
@@ -219,192 +280,11 @@ private struct DashboardProductivityScale: View {
         }
         .frame(width: 42, alignment: .leading)
     }
-}
 
-private struct DashboardProductivityPlot: View {
-    let period: DashboardInsightPeriod
-    let points: [DashboardProductivityPoint]
-    let axisMaximum: Int
-
-    private static let todayAxisHourOffsets = [0, 6, 12, 18, 24]
-
-    private var hourFormatter: DateFormatter {
-        let formatter = DateFormatter()
-        formatter.calendar = DashboardPeriodWindows.dashboardCalendar()
-        formatter.locale = .current
-        formatter.setLocalizedDateFormatFromTemplate("j")
-        return formatter
-    }
-
-    var body: some View {
-        GeometryReader { geometry in
-            let labelHeight: CGFloat = 30
-            let plotHeight = max(0, geometry.size.height - labelHeight)
-
-            ZStack(alignment: .topLeading) {
-                DashboardProductivityGrid()
-                    .frame(height: plotHeight)
-
-                VStack(spacing: 0) {
-                    HStack(alignment: .bottom, spacing: points.count > 14 ? 3 : 14) {
-                        ForEach(points.indices, id: \.self) { index in
-                            DashboardProductivityBar(
-                                point: points[index],
-                                axisMaximum: axisMaximum,
-                                plotHeight: plotHeight
-                            )
-                        }
-                    }
-                    .frame(height: plotHeight, alignment: .bottom)
-
-                    xAxisLabels
-                        .accessibilityHidden(true)
-                        .frame(height: labelHeight, alignment: .top)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var xAxisLabels: some View {
-        if period == .today {
-            HStack {
-                ForEach(todayAxisLabels.indices, id: \.self) { index in
-                    axisLabel(todayAxisLabels[index])
-
-                    if index < todayAxisLabels.count - 1 {
-                        Spacer(minLength: 0)
-                    }
-                }
-            }
-        } else {
-            HStack(alignment: .top, spacing: points.count > 14 ? 3 : 14) {
-                ForEach(points.indices, id: \.self) { index in
-                    axisLabel(xAxisLabel(for: points[index], at: index))
-                        .frame(maxWidth: .infinity)
-                }
-            }
-        }
-    }
-
-    private func axisLabel(_ label: String) -> some View {
-        Text(label)
-            .font(.system(size: 12, weight: .semibold))
+    private func yAxisLabel(_ label: Int) -> some View {
+        Text(Formatters.formattedAxisValue(label))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(AppTheme.Text.secondary)
             .lineLimit(1)
-    }
-
-    private var todayAxisLabels: [String] {
-        guard let firstDate = points.first?.date else {
-            return []
-        }
-
-        let calendar = DashboardPeriodWindows.dashboardCalendar()
-        let formatter = hourFormatter
-
-        return Self.todayAxisHourOffsets.compactMap { offset in
-            calendar.date(byAdding: .hour, value: offset, to: firstDate).map {
-                formatter.string(from: $0)
-            }
-        }
-    }
-
-    private func xAxisLabel(for point: DashboardProductivityPoint, at index: Int) -> String {
-        switch period {
-        case .today:
-            return ""
-        case .allTime:
-            return monthlyAxisLabel(for: point, at: index)
-        case .lastSevenDays, .lastThirtyDays, .thisYear:
-            return defaultAxisLabel(for: point, at: index)
-        }
-    }
-
-    private func defaultAxisLabel(for point: DashboardProductivityPoint, at index: Int) -> String {
-        guard points.count > 14 else {
-            return point.label
-        }
-
-        if index == 0 || index == points.count - 1 || (index + 1).isMultiple(of: 7) {
-            return point.label
-        }
-
-        return ""
-    }
-
-    private func monthlyAxisLabel(for point: DashboardProductivityPoint, at index: Int) -> String {
-        guard points.count > 12 else {
-            return point.label
-        }
-
-        let labelStride: Int
-        if points.count <= 24 {
-            labelStride = 2
-        } else if points.count <= 36 {
-            labelStride = 3
-        } else {
-            labelStride = 6
-        }
-
-        if index == 0 || index == points.count - 1 || index.isMultiple(of: labelStride) {
-            return point.label
-        }
-
-        return ""
-    }
-}
-
-private struct DashboardProductivityGrid: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach(0..<5, id: \.self) { index in
-                Rectangle()
-                    .fill(AppTheme.Border.subtle.opacity(index == 4 ? 0.9 : 0.45))
-                    .frame(height: 1)
-
-                if index < 4 {
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-    }
-}
-
-private struct DashboardProductivityBar: View {
-    let point: DashboardProductivityPoint
-    let axisMaximum: Int
-    let plotHeight: CGFloat
-
-    private var barHeight: CGFloat {
-        guard axisMaximum > 0, point.words > 0 else { return 0 }
-        return max(4, plotHeight * CGFloat(point.words) / CGFloat(axisMaximum))
-    }
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(
-                LinearGradient(
-                    colors: [
-                        AppTheme.Accent.strong,
-                        AppTheme.Accent.primary.opacity(0.46)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .frame(maxWidth: 22)
-            .frame(height: barHeight)
-            .frame(maxWidth: .infinity, alignment: .bottom)
-            .shadow(color: AppTheme.Accent.primary.opacity(point.words > 0 ? 0.12 : 0), radius: 5, y: 2)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(point.accessibilityLabel)
-            .accessibilityValue(wordsAccessibilityValue)
-    }
-
-    private var wordsAccessibilityValue: String {
-        String(
-            format: String(localized: "%@ words"),
-            Formatters.formattedNumber(point.words)
-        )
     }
 }
