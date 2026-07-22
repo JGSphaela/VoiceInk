@@ -11,8 +11,8 @@ struct GeminiProvider: CloudProvider {
     var models: [CloudModel] {
         [
             CloudModel(
-                name: "gemini-3.5-flash",
-                displayName: "Gemini 3.5 Flash",
+                name: "gemini-3.6-flash",
+                displayName: "Gemini 3.6 Flash",
                 description: "Google's current fast model for high-quality transcription",
                 provider: .gemini,
                 speed: 0.92,
@@ -21,8 +21,8 @@ struct GeminiProvider: CloudProvider {
                 supportedLanguages: LanguageDictionary.forProvider(isMultilingual: true, provider: .gemini)
             ),
             CloudModel(
-                name: "gemini-3.1-flash-lite",
-                displayName: "Gemini 3.1 Flash-Lite",
+                name: "gemini-3.5-flash-lite",
+                displayName: "Gemini 3.5 Flash-Lite",
                 description: "Google's efficient model for lightweight transcription tasks",
                 provider: .gemini,
                 speed: 0.95,
